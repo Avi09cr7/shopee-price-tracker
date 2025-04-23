@@ -1,15 +1,8 @@
 const express = require('express');
-const axios = require('axios');
-const cors = require('cors');
+const puppeteer = require('puppeteer');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(cors());
-
-app.get('/', (req, res) => {
-  res.send('Shopee Price Tracker is live!');
-});
+const PORT = process.env.PORT || 10000;
 
 app.get('/shopee-price', async (req, res) => {
   const { itemid, shopid } = req.query;
@@ -18,30 +11,34 @@ app.get('/shopee-price', async (req, res) => {
     return res.status(400).json({ error: 'Missing itemid or shopid' });
   }
 
-  const apiUrl = `https://shopee.sg/api/v4/item/get?itemid=${itemid}&shopid=${shopid}`;
+  const productUrl = `https://shopee.sg/product/${shopid}/${itemid}`;
 
   try {
-    const response = await axios.get(apiUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        'Referer': `https://shopee.sg/product/${shopid}/${itemid}`,
-        'Accept-Language': 'en-US,en;q=0.9',
-        'X-Requested-With': 'XMLHttpRequest'
-      }
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    const page = await browser.newPage();
+
+    await page.goto(productUrl, { waitUntil: 'networkidle2' });
+
+    const data = await page.evaluate(() => {
+      const name = document.querySelector('div.page-product__content h1')?.innerText;
+      const price = document.querySelector('div.pdp-price')?.innerText ||
+                    document.querySelector('div.pdp-mod-product-price__current')?.innerText;
+      return { name, price };
     });
 
-    const data = response.data;
-    const name = data.item?.name;
-    const price = data.item?.price / 100000;
+    await browser.close();
 
-    if (!name || !price) {
-      return res.status(500).json({ error: 'Product info not found in response' });
+    if (!data.name || !data.price) {
+      return res.status(404).json({ error: 'Product details not found' });
     }
 
-    return res.json({ item_name: name, price: price });
+    res.json(data);
   } catch (error) {
-    console.error('Shopee fetch error:', error.response?.data || error.message);
-    return res.status(500).json({ error: 'Failed to fetch product data' });
+    console.error('Scraping error:', error);
+    res.status(500).json({ error: 'Failed to fetch product data' });
   }
 });
 
